@@ -1,17 +1,8 @@
 {
-  "version": 2,
   "builds": [
     { "src": "main.py", "use": "@vercel/python" }
   ],
-  "functions": {
-    "main.py": {
-      "runtime": "@vercel/python",
-      "maxDuration": 30,
-      "memory": 1024
-    }
-  },
   "routes": [
     { "src": "/(.*)", "dest": "main.py" }
-  ],
-  "regions": ["iad1"]
+  ]
 }
