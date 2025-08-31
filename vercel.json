@@ -1,23 +1,18 @@
 {
     "version": 2,
-    "builds": [
-      {
-        "src": "main.py",
-        "use": "@vercel/python",
-        "config": {
-          "runtime": "python3.9",
-          "maxDuration": 300
-        }
+    "functions": {
+      "main.py": {
+        "runtime": "@vercel/python",
+        "maxDuration": 30,
+        "memory": 1024
       }
-    ],
+    },
     "routes": [
       {
         "src": "/(.*)",
         "dest": "main.py"
       }
     ],
-    "env": {
-      "VERCEL_ENV": "production"
-    }
+    "regions": ["iad1"]
   }
   
