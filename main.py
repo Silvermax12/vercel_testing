@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -7,22 +7,18 @@ import asyncio
 import os
 import uuid
 import json
-import logging
 from datetime import datetime
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Check if running on Vercel
 IS_VERCEL = os.getenv("VERCEL_ENV") == "production" or os.getenv("VERCEL") == "1" or os.getenv("VERCEL_URL") is not None
 
 # Import mangum for Vercel deployment
-if IS_VERCEL:
-    try:
-        from mangum import Mangum
-    except ImportError:
-        print("Warning: mangum not available, but required for Vercel deployment")
+MANGUM_AVAILABLE = False
+try:
+    from mangum import Mangum
+    MANGUM_AVAILABLE = True
+except ImportError:
+    print("Warning: mangum not available, but required for Vercel deployment")
 
 from session_mgr import SessionManager
 from api_client import search_anime, get_all_episodes
@@ -56,19 +52,6 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
-
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    """Log all incoming requests"""
-    start_time = datetime.now()
-    logger.info(f"Request: {request.method} {request.url}")
-
-    response = await call_next(request)
-
-    process_time = (datetime.now() - start_time).total_seconds() * 1000
-    logger.info(f"Response: {response.status_code} - {process_time:.2f}ms")
-
-    return response
 
 # Global session manager - initialized lazily to avoid startup issues
 sm = None
@@ -138,6 +121,7 @@ async def root():
         "version": "1.0.0",
         "status": "running",
         "environment": "vercel" if IS_VERCEL else "local",
+        "vercel_url": os.getenv("VERCEL_URL"),
         "endpoints": [
             "GET /",
             "GET /health",
@@ -154,37 +138,15 @@ async def root():
         ]
     }
 
-@app.options("/{path:path}")
-async def options_handler(path: str):
-    """Handle CORS preflight requests"""
-    return {
-        "message": "CORS preflight OK",
-        "path": path
-    }
-
 @app.get("/health")
 async def health_check():
-    """Comprehensive health check endpoint"""
-    import platform
-    import sys
-
+    """Simple health check endpoint"""
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "vercel": IS_VERCEL,
-        "python_version": sys.version,
-        "platform": platform.platform(),
-        "environment": {
-            "VERCEL": os.getenv("VERCEL"),
-            "VERCEL_ENV": os.getenv("VERCEL_ENV"),
-            "VERCEL_URL": os.getenv("VERCEL_URL"),
-            "VERCEL_REGION": os.getenv("VERCEL_REGION")
-        },
-        "dependencies": {
-            "mangum_available": "mangum" in sys.modules,
-            "selenium_available": "selenium" in sys.modules,
-            "m3u8_available": "m3u8" in sys.modules
-        }
+        "vercel_url": os.getenv("VERCEL_URL"),
+        "mangum_available": MANGUM_AVAILABLE
     }
 
 @app.post("/search", response_model=List[SearchResult])
@@ -826,64 +788,20 @@ async def download_episodes_m3u8_background(
         print(f"❌ M3U8 download task {task_id} failed: {e}")
 
 # Vercel serverless function handler
-def handler(event, context):
-    """
-    Vercel serverless function handler for FastAPI
-    This function is called by Vercel when the serverless function is invoked.
-    """
-    logger.info(f"Handler called with event: {event.get('path', 'unknown path')}")
+if IS_VERCEL and MANGUM_AVAILABLE:
+    try:
+        # Create ASGI handler for Vercel
+        handler = Mangum(app, lifespan="off")
 
-    if IS_VERCEL:
-        try:
-            # Create ASGI handler for Vercel with proper configuration
-            mangum_handler = Mangum(
-                app,
-                lifespan="off",
-                api_gateway_base_path="/",
-                exclude_headers=["x-amzn-Remapped-Authorization"]
-            )
-
-            logger.info("Processing request through Mangum handler")
-            response = mangum_handler(event, context)
-            logger.info(f"Handler response status: {response.get('statusCode', 'unknown')}")
-            return response
-
-        except Exception as e:
-            logger.error(f"❌ Handler error: {e}", exc_info=True)
-            return {
-                "statusCode": 500,
-                "body": json.dumps({
-                    "error": "Internal server error",
-                    "details": str(e),
-                    "timestamp": datetime.now().isoformat()
-                }),
-                "headers": {
-                    "Content-Type": "application/json",
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Headers": "*",
-                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS"
-                }
-            }
-    else:
-        logger.warning("Handler called in non-Vercel environment")
-        return {
-            "statusCode": 404,
-            "body": json.dumps({
-                "error": "Handler not available in local environment",
-                "timestamp": datetime.now().isoformat()
-            }),
-            "headers": {
-                "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*"
-            }
-        }
+        # Test the handler to make sure it works
+        print("✅ Vercel handler initialized successfully")
+    except Exception as e:
+        print(f"❌ Failed to initialize Vercel handler: {e}")
+        handler = None
+else:
+    handler = None
 
 # For local development
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", 8000)),
-        reload=not IS_VERCEL
-    )
+    uvicorn.run(app, host="0.0.0.0", port=8000)
